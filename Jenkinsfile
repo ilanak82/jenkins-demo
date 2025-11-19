@@ -1,51 +1,75 @@
+cat > Jenkinsfile << 'EOF'
 pipeline {
     agent any
+    
+    environment {
+        DOCKER_IMAGE = "my-web-app"
+        DOCKER_TAG = "${BUILD_NUMBER}"
+    }
     
     stages {
         stage('Checkout') {
             steps {
-                echo 'Checking out code from Git...'
+                echo 'Checking out code...'
                 checkout scm
             }
         }
         
-        stage('Build') {
+        stage('Build Docker Image') {
             steps {
-                echo 'Building the project...'
-                sh 'echo "Build timestamp: $(date)" > build-info.txt'
-                sh 'ls -la'
+                echo "Building Docker image: ${DOCKER_IMAGE}:${DOCKER_TAG}"
+                script {
+                    sh "docker build -t ${DOCKER_IMAGE}:${DOCKER_TAG} ."
+                    sh "docker tag ${DOCKER_IMAGE}:${DOCKER_TAG} ${DOCKER_IMAGE}:latest"
+                }
             }
         }
         
-        stage('Test') {
+        stage('Test Image') {
             steps {
-                echo 'Running tests...'
-                sh '''
-                    if [ -f index.html ]; then
-                        echo "✓ index.html exists"
-                    else
-                        echo "✗ index.html missing"
-                        exit 1
-                    fi
-                '''
+                echo 'Testing Docker image...'
+                script {
+                    sh "docker images | grep ${DOCKER_IMAGE}"
+                }
             }
         }
         
-        stage('Report') {
+        stage('Run Container') {
             steps {
-                echo 'Generating report...'
-                sh 'cat build-info.txt'
-                sh 'echo "All tests passed!"'
+                echo 'Running container for testing...'
+                script {
+                    sh '''
+                        docker rm -f test-container 2>/dev/null || true
+                        docker run -d --name test-container -p 8081:80 ${DOCKER_IMAGE}:${DOCKER_TAG}
+                        sleep 3
+                        curl -f http://localhost:8081 || exit 1
+                        echo "Container is running successfully!"
+                    '''
+                }
+            }
+        }
+        
+        stage('Cleanup') {
+            steps {
+                echo 'Cleaning up test container...'
+                script {
+                    sh 'docker stop test-container || true'
+                    sh 'docker rm test-container || true'
+                }
             }
         }
     }
     
     post {
         success {
-            echo 'Pipeline completed successfully! ✅'
+            echo "✅ Pipeline completed! Docker image ${DOCKER_IMAGE}:${DOCKER_TAG} is ready!"
         }
         failure {
-            echo 'Pipeline failed! ❌'
+            echo '❌ Pipeline failed!'
+            script {
+                sh 'docker stop test-container 2>/dev/null || true'
+                sh 'docker rm test-container 2>/dev/null || true'
+            }
         }
     }
 }
